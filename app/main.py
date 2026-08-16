@@ -21,7 +21,7 @@ def build_application(settings: Settings | None = None) -> SvoyTonBot:
 def main() -> None:
     """Запустить VK LongPoll до остановки процесса."""
 
-    build_application().bot.run_forever()
+    build_application().bot.run()
 
 
 if __name__ == "__main__":
