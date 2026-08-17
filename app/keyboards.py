@@ -25,6 +25,13 @@ MORE_KEYBOARD = (
     .get_json()
 )
 
+INPUT_KEYBOARD = (
+    Keyboard(one_time=False)
+    .add(Text("Отмена"), color=KeyboardButtonColor.SECONDARY)
+    .add(Text("Меню"), color=KeyboardButtonColor.SECONDARY)
+    .get_json()
+)
+
 RESULT_KEYBOARD = (
     Keyboard(one_time=False)
     .add(Text("Подходит"), color=KeyboardButtonColor.POSITIVE)

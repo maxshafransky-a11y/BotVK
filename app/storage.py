@@ -143,7 +143,7 @@ class SQLiteStore:
         brief: str,
         result: GenerationResult,
         *,
-        status: str = "delivered",
+        status: str = "draft",
     ) -> int:
         """Сохранить успешный черновик и вернуть его локальный ID."""
 
@@ -168,6 +168,36 @@ class SQLiteStore:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def update_generation(
+        self,
+        user_id: int,
+        generation_id: int,
+        *,
+        output_text: str | None = None,
+        status: str | None = None,
+    ) -> bool:
+        """Обновить draft только его владельцу и вернуть факт изменения."""
+
+        changes: list[str] = []
+        values: list[object] = []
+        if output_text is not None:
+            changes.append("output_text = ?")
+            values.append(output_text)
+        if status is not None:
+            changes.append("status = ?")
+            values.append(status)
+        if not changes:
+            return False
+
+        values.extend((generation_id, user_id))
+        with self._connection() as connection:
+            cursor = connection.execute(
+                f"UPDATE generations SET {', '.join(changes)} "
+                "WHERE id = ? AND user_id = ?",
+                values,
+            )
+            return cursor.rowcount == 1
 
     def record_event(
         self,

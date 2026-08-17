@@ -6,10 +6,10 @@ from vkbottle import Bot
 from vkbottle.bot import Message
 
 from .config import Settings
-from .keyboards import MAIN_KEYBOARD, MORE_KEYBOARD, RESULT_KEYBOARD
+from .keyboards import INPUT_KEYBOARD, MAIN_KEYBOARD, MORE_KEYBOARD, RESULT_KEYBOARD
 from .polza_client import PolzaClient, PolzaError
-from .prompts import BrandProfile, TaskType, build_messages
-from .states import Session, StateStore
+from .prompts import TASK_INPUT_PROMPTS, BrandProfile, TaskType, build_messages
+from .states import Draft, Session, StateStore
 from .storage import SQLiteStore
 from .trace import TraceLogger
 
@@ -97,7 +97,7 @@ class SvoyTonBot:
             await message.answer(
                 "Отправь профиль одной строкой через |:\n"
                 "название | предложение | аудитория | тон | факты",
-                keyboard=MORE_KEYBOARD,
+                keyboard=INPUT_KEYBOARD,
             )
             return
 
@@ -105,28 +105,52 @@ class SvoyTonBot:
         if task:
             self._states.start_task(user_id, task)
             await message.answer(
-                "Опиши задачу одним сообщением. Перед отправкой будет выполнен "
-                "один текстовый AI-запрос.",
-                keyboard=MORE_KEYBOARD,
+                f"Задача: {task}.\n\n{TASK_INPUT_PROMPTS[task]}\n\n"
+                "Отправь brief одним сообщением. Можно отменить в любой момент.",
+                keyboard=INPUT_KEYBOARD,
             )
             return
 
         if normalized == "подходит":
+            draft = session.current_draft
+            if draft is None:
+                await message.answer(
+                    "Нет активного черновика для принятия. Сначала выбери задачу.",
+                    keyboard=MAIN_KEYBOARD,
+                )
+                return
+            if self._storage is not None and draft.id is not None:
+                updated = self._storage.update_generation(
+                    user_id,
+                    draft.id,
+                    status="accepted",
+                )
+                if not updated:
+                    await message.answer(
+                        "Не нашёл этот черновик. Сгенерируй новый вариант.",
+                        keyboard=MAIN_KEYBOARD,
+                    )
+                    return
+            draft.status = "accepted"
             await message.answer(
-                "Принял как подходящий черновик. Публикация и отправка не выполняются.",
+                "Принял этот черновик. Публикация и отправка не выполняются.",
                 keyboard=MAIN_KEYBOARD,
             )
+            self._states.clear_flow(user_id)
             return
         if normalized == "ещё вариант" or normalized == "еще вариант":
-            if session.mode and session.last_brief:
+            if session.current_draft is not None and session.mode and session.last_brief:
                 await self._generate(message, user_id, session, session.last_brief)
             else:
-                await message.answer("Сначала выбери задачу и отправь brief.", keyboard=MAIN_KEYBOARD)
+                await message.answer("Нет активного черновика для нового варианта.", keyboard=MAIN_KEYBOARD)
             return
         if normalized == "изменить вручную":
-            if session.mode and session.last_brief:
+            if session.current_draft is not None and session.mode:
                 self._states.await_manual_edit(user_id)
-                await message.answer("Отправь свою версию текста. Она останется черновиком.")
+                await message.answer(
+                    "Отправь свою версию текста. Она останется черновиком.",
+                    keyboard=INPUT_KEYBOARD,
+                )
             else:
                 await message.answer("Пока нет черновика для редактирования.", keyboard=MAIN_KEYBOARD)
             return
@@ -136,7 +160,27 @@ class SvoyTonBot:
             return
         if session.awaiting in {"brief", "manual_edit"}:
             if session.awaiting == "manual_edit":
-                self._states.set_brief(user_id, text)
+                draft = session.current_draft
+                if draft is None:
+                    self._states.clear_flow(user_id)
+                    await message.answer("Черновик уже недоступен. Начни новую задачу.", keyboard=MAIN_KEYBOARD)
+                    return
+                if self._storage is not None and draft.id is not None:
+                    updated = self._storage.update_generation(
+                        user_id,
+                        draft.id,
+                        output_text=text,
+                        status="edited",
+                    )
+                    if not updated:
+                        await message.answer(
+                            "Не удалось сохранить правку. Сгенерируй новый черновик.",
+                            keyboard=MAIN_KEYBOARD,
+                        )
+                        return
+                draft.text = text
+                draft.status = "edited"
+                session.awaiting = None
                 await message.answer(
                     "Сохранил ручную правку как черновик. Ничего не отправлено.",
                     keyboard=RESULT_KEYBOARD,
@@ -169,9 +213,11 @@ class SvoyTonBot:
         self._states.save_profile(user_id, profile)
         if self._storage is not None:
             self._storage.save_profile(user_id, profile)
+            confirmation = "Профиль сохранён в SQLite и доступен после перезапуска."
+        else:
+            confirmation = "Профиль сохранён до перезапуска текущего процесса."
         await message.answer(
-            "Профиль сохранён в памяти текущего запуска. При перезапуске его "
-            "сохранение добавит SQLite-фаза.",
+            confirmation,
             keyboard=MAIN_KEYBOARD,
         )
 
@@ -210,7 +256,24 @@ class SvoyTonBot:
             return
 
         if self._storage is not None:
-            self._storage.save_generation(user_id, session.mode, brief, result)
+            draft_id = self._storage.save_generation(
+                user_id,
+                session.mode,
+                brief,
+                result,
+                status="draft",
+            )
+        else:
+            draft_id = None
+        self._states.set_draft(
+            user_id,
+            Draft(
+                id=draft_id,
+                task=session.mode,
+                brief=brief,
+                text=result.text,
+            ),
+        )
         if self._trace is not None:
             self._trace.record(
                 user_id,
@@ -221,7 +284,7 @@ class SvoyTonBot:
             )
 
         await message.answer(
-            f"ЧЕРНОВИК · {result.provider} · {result.model}\n\n"
+            f"ЧЕРНОВИК · сохранён · {result.provider} · {result.model}\n\n"
             f"{result.text}\n\n"
             "Проверь факты перед использованием. Этот текст не опубликован и не отправлен.",
             keyboard=RESULT_KEYBOARD,

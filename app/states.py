@@ -7,6 +7,18 @@ from .prompts import BrandProfile, TaskType
 
 
 Awaiting = Literal["brief", "manual_edit", "profile"]
+DraftStatus = Literal["draft", "edited", "accepted"]
+
+
+@dataclass
+class Draft:
+    """Текущий результат, над которым пользователь выполняет action."""
+
+    id: int | None
+    task: TaskType
+    brief: str
+    text: str
+    status: DraftStatus = "draft"
 
 
 @dataclass
@@ -16,6 +28,7 @@ class Session:
     mode: TaskType | None = None
     awaiting: Awaiting | None = None
     last_brief: str | None = None
+    current_draft: Draft | None = None
     profile: BrandProfile = field(default_factory=BrandProfile)
 
 
@@ -33,6 +46,7 @@ class StateStore:
         session.mode = task
         session.awaiting = "brief"
         session.last_brief = None
+        session.current_draft = None
         return session
 
     def start_profile(self, user_id: int) -> Session:
@@ -44,6 +58,14 @@ class StateStore:
     def set_brief(self, user_id: int, brief: str) -> Session:
         session = self.get(user_id)
         session.last_brief = brief
+        session.awaiting = None
+        return session
+
+    def set_draft(self, user_id: int, draft: Draft) -> Session:
+        session = self.get(user_id)
+        session.current_draft = draft
+        session.last_brief = draft.brief
+        session.mode = draft.task
         session.awaiting = None
         return session
 
