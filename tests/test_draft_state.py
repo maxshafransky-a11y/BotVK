@@ -27,7 +27,7 @@ class DraftStateTests(unittest.TestCase):
         self.assertEqual(session.mode, "rewrite")
         self.assertEqual(session.awaiting, "brief")
 
-    def test_clear_flow_keeps_draft_available_for_result_action(self) -> None:
+    def test_clear_flow_removes_draft_from_result_actions(self) -> None:
         states = StateStore()
         states.set_draft(
             10,
@@ -36,7 +36,7 @@ class DraftStateTests(unittest.TestCase):
 
         states.clear_flow(10)
 
-        self.assertIsNotNone(states.get(10).current_draft)
+        self.assertIsNone(states.get(10).current_draft)
         self.assertIsNone(states.get(10).awaiting)
 
 

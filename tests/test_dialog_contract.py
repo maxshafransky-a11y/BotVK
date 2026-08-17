@@ -17,6 +17,8 @@ class DialogContractTests(unittest.TestCase):
 
         for term in ("цены", "скидки", "сроки"):
             self.assertIn(term, messages[0]["content"])
+        for term in ("быстрой", "надёжной", "лучшей"):
+            self.assertIn(term, messages[0]["content"])
         self.assertIn("не нужно придумывать", messages[0]["content"])
         self.assertIn("Что продаём", messages[1]["content"])
 

@@ -53,6 +53,7 @@ class StateStore:
         session = self.get(user_id)
         session.mode = None
         session.awaiting = "profile"
+        session.current_draft = None
         return session
 
     def set_brief(self, user_id: int, brief: str) -> Session:
@@ -79,6 +80,7 @@ class StateStore:
         session.mode = None
         session.awaiting = None
         session.last_brief = None
+        session.current_draft = None
         return session
 
     def save_profile(self, user_id: int, profile: BrandProfile) -> Session:

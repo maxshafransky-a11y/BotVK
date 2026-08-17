@@ -24,9 +24,14 @@ class FakeMessage:
 
 
 class FakePolza:
+    def __init__(self, text: str = "Сгенерированный текст") -> None:
+        self.text = text
+        self.messages: list[list[dict[str, str]]] = []
+
     async def generate(self, messages: list[dict[str, str]], *, user_id: str) -> GenerationResult:
+        self.messages.append(messages)
         return GenerationResult(
-            text="Сгенерированный текст",
+            text=self.text,
             provider="polza",
             model="test/model",
             usage={"total_tokens": 3},
@@ -34,12 +39,12 @@ class FakePolza:
         )
 
 
-def make_bot(storage: SQLiteStore) -> SvoyTonBot:
+def make_bot(storage: SQLiteStore, polza: FakePolza | None = None) -> SvoyTonBot:
     bot = object.__new__(SvoyTonBot)
     bot._states = StateStore()
     bot._storage = storage
     bot._trace = None
-    bot._polza = FakePolza()
+    bot._polza = polza or FakePolza()
     return bot
 
 
@@ -60,19 +65,24 @@ class BotDialogTests(unittest.TestCase):
             self.assertEqual(session.current_draft.status, "draft")
             self.assertIn("ЧЕРНОВИК", brief_message.answers[-1][0])
             self.assertIn("не опубликован", brief_message.answers[-1][0])
+            draft_id = session.current_draft.id
 
             asyncio.run(bot._dispatch(FakeMessage("Подходит")))
 
-            self.assertEqual(session.current_draft.status, "accepted")
+            self.assertIsNone(session.current_draft)
             connection = sqlite3.connect(bot._storage.path)
             try:
                 status = connection.execute(
                     "select status from generations where id = ?",
-                    (session.current_draft.id,),
+                    (draft_id,),
                 ).fetchone()[0]
             finally:
                 connection.close()
             self.assertEqual(status, "accepted")
+
+            second_accept = FakeMessage("Подходит")
+            asyncio.run(bot._dispatch(second_accept))
+            self.assertIn("нет активного черновика", second_accept.answers[-1][0].casefold())
 
     def test_result_actions_without_draft_do_not_claim_acceptance(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -95,6 +105,38 @@ class BotDialogTests(unittest.TestCase):
             draft = bot._states.get(10).current_draft
             self.assertEqual(draft.text, "Моя финальная версия")
             self.assertEqual(draft.status, "edited")
+
+    def test_unrelated_profile_is_not_sent_as_generation_context(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            polza = FakePolza()
+            bot = make_bot(SQLiteStore(Path(temp_dir) / "bot.sqlite3"), polza)
+
+            asyncio.run(
+                bot._dispatch(
+                    FakeMessage(
+                        "профиль: Кофейня Утро | кофе и выпечка | жители города | дружелюбный | скидка 20%"
+                    )
+                )
+            )
+            asyncio.run(bot._dispatch(FakeMessage("Продающий текст")))
+            asyncio.run(bot._dispatch(FakeMessage("Услуга ремонта телефонов. Цена не указана.")))
+
+            system_prompt = polza.messages[-1][0]["content"]
+            self.assertNotIn("Кофейня Утро", system_prompt)
+            self.assertNotIn("скидка 20%", system_prompt)
+
+    def test_vk_output_does_not_expose_markdown_markers(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            polza = FakePolza("**Заголовок**\n* **Тема:** утро")
+            bot = make_bot(SQLiteStore(Path(temp_dir) / "bot.sqlite3"), polza)
+
+            asyncio.run(bot._dispatch(FakeMessage("Написать пост")))
+            brief = FakeMessage("Пост о кофейне")
+            asyncio.run(bot._dispatch(brief))
+
+            output = brief.answers[-1][0]
+            self.assertNotIn("**", output)
+            self.assertIn("• Тема: утро", output)
 
 
 if __name__ == "__main__":

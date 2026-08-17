@@ -1,5 +1,7 @@
 """VK LongPoll и conversational UX мини-версии «СвойТон»."""
 
+import re
+from dataclasses import replace
 from time import perf_counter
 
 from vkbottle import Bot
@@ -28,6 +30,36 @@ TASKS: dict[str, TaskType] = {
     "идеи контента": "content_ideas",
     "переписать текст": "rewrite",
 }
+
+
+def _profile_matches_brief(profile: BrandProfile, brief: str) -> bool:
+    """Разрешить профиль только если brief явно относится к его предметной области."""
+
+    profile_words = re.findall(
+        r"[a-zа-яё0-9]{5,}",
+        " ".join((profile.business_name, profile.offer, *profile.facts)).casefold(),
+    )
+    brief_words = re.findall(r"[a-zа-яё0-9]{5,}", brief.casefold())
+    return any(
+        profile_word[:5] == brief_word[:5]
+        for profile_word in profile_words
+        for brief_word in brief_words
+    )
+
+
+def _profile_for_brief(profile: BrandProfile, brief: str) -> BrandProfile:
+    """Не переносить факты другого бизнеса в новый brief; тон безопасен как стиль."""
+
+    if _profile_matches_brief(profile, brief):
+        return profile
+    return BrandProfile(tone=profile.tone)
+
+
+def _normalize_vk_text(text: str) -> str:
+    """Убрать базовые Markdown-маркеры, которые VK показывает как обычный текст."""
+
+    without_bold = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    return re.sub(r"(?m)^\s*\*\s+", "• ", without_bold)
 
 
 class SvoyTonBot:
@@ -113,7 +145,7 @@ class SvoyTonBot:
 
         if normalized == "подходит":
             draft = session.current_draft
-            if draft is None:
+            if draft is None or draft.status == "accepted":
                 await message.answer(
                     "Нет активного черновика для принятия. Сначала выбери задачу.",
                     keyboard=MAIN_KEYBOARD,
@@ -236,7 +268,7 @@ class SvoyTonBot:
         await message.answer("Готовлю черновик…")
         try:
             result = await self._polza.generate(
-                build_messages(session.mode, brief, session.profile),
+                build_messages(session.mode, brief, _profile_for_brief(session.profile, brief)),
                 user_id=str(user_id),
             )
         except (PolzaError, ValueError) as exc:
@@ -254,6 +286,8 @@ class SvoyTonBot:
                 keyboard=MAIN_KEYBOARD,
             )
             return
+
+        result = replace(result, text=_normalize_vk_text(result.text))
 
         if self._storage is not None:
             draft_id = self._storage.save_generation(
